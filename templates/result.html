@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AI Candidate Match Results. Detailed list of candidate scores, semantic similarity, and skill alignments.">
+    <title>Screening & Ranking Results</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Screening Results</h1>
+            <p class="subtitle">Ranked candidates based on job description fit and semantic similarity</p>
+        </header>
+
+        <!-- Flash Message Alerts -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="alert-container">
+                    {% for category, msg in messages %}
+                        <div class="alert-box {% if category == 'success' %}alert-success{% endif %}">
+                            {% if category == 'success' %}✅{% else %}⚠️{% endif %} {{ msg }}
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+            <a href="/" id="back-home-link" class="back-link" style="margin-bottom: 0;">← Analyze More Resumes</a>
+            <a href="/dashboard" id="view-dashboard-link" class="back-link" style="margin-bottom: 0;">📊 View Full Database Dashboard</a>
+        </div>
+
+        <main>
+            <div class="card" style="padding: 1.5rem;">
+                {% if not results %}
+                    <div style="text-align: center; padding: 3rem 1rem; color: var(--text-secondary);">
+                        <p style="font-size: 1.2rem; font-weight: 600; margin-bottom: 0.5rem;">No Candidates Found</p>
+                        <p style="font-size: 0.9rem;">Upload resumes on the homepage to start analyzing and ranking candidates.</p>
+                    </div>
+                {% else %}
+                    <div class="table-responsive">
+                        <table id="results-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 80px; text-align: center;">Rank</th>
+                                    <th>Candidate Name</th>
+                                    <th>Semantic Match</th>
+                                    <th>Match Score</th>
+                                    <th>Skills Found</th>
+                                    <th>Matched Skills</th>
+                                    <th>Skill Gaps</th>
+                                    <th style="text-align: center; width: 120px;">AI Analysis</th>
+                                    <th style="text-align: center; width: 80px;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for r in results %}
+                                <tr class="candidate-row" id="row-{{ loop.index }}">
+                                    <td style="text-align: center; font-weight: 700;">
+                                        <span class="score-badge {% if loop.index == 1 %}score-high{% else %}score-medium{% endif %}">
+                                            #{{ loop.index }}
+                                        </span>
+                                    </td>
+                                    <td style="font-weight: 600;">
+                                        {{ r.name }}
+                                    </td>
+                                    <td>
+                                        <div class="progress-bar-container">
+                                            <div class="progress-bar {% if r.similarity >= 70 %}progress-success{% elif r.similarity >= 40 %}progress-warning{% else %}progress-danger{% endif %}" style="width: {{ r.similarity }}%"></div>
+                                        </div>
+                                        <span style="font-weight: 600;">{{ r.similarity }}%</span>
+                                    </td>
+                                    <td>
+                                        <span class="score-badge {% if r.score >= 70 %}score-high{% elif r.score >= 45 %}score-medium{% else %}score-low{% endif %}">
+                                            {{ r.score }}%
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div class="tags-container">
+                                            {% if r.skills %}
+                                                {% for skill in r.skills %}
+                                                    <span class="tag">{{ skill }}</span>
+                                                {% endfor %}
+                                            {% else %}
+                                                <span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">None detected</span>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="tags-container">
+                                            {% if r.matched %}
+                                                {% for match in r.matched %}
+                                                    <span class="tag tag-matched">{{ match }}</span>
+                                                {% endfor %}
+                                            {% else %}
+                                                <span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">None</span>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="tags-container">
+                                            {% if r.missing %}
+                                                {% for miss in r.missing %}
+                                                    <span class="tag tag-missing">{{ miss }}</span>
+                                                {% endfor %}
+                                            {% else %}
+                                                <span class="tag tag-matched" style="font-size: 0.75rem;">None (Perfect Match)</span>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                    <td style="text-align: center;">
+                                        <button class="toggle-details-btn" onclick="toggleDetails('details-{{ loop.index }}', this)">
+                                            <span>Expand</span> 🔍
+                                        </button>
+                                    </td>
+                                    <td style="text-align: center;">
+                                        {% if r._id %}
+                                        <form action="/delete/{{ r._id }}" method="POST" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete this candidate record?');">
+                                            <button type="submit" class="delete-btn" title="Delete candidate">
+                                                🗑️
+                                            </button>
+                                        </form>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                
+                                <!-- Hidden Expandable Details Row containing all AI features -->
+                                <tr id="details-{{ loop.index }}" class="details-row" style="display: none;">
+                                    <td colspan="9">
+                                        <div class="ai-details-panel">
+                                            {% if r.llm_feedback %}
+                                                <!-- Executive Recruiter Verdict -->
+                                                <div class="verdict-box">
+                                                    <strong>Recruiter Verdict:</strong> {{ r.llm_feedback.recruiter_verdict }}
+                                                </div>
+
+                                                <div class="ai-details-grid">
+                                                    <!-- Left Side: Job Fit -->
+                                                    <div>
+                                                        <div class="ai-block-title">📊 Job Fit Breakdown</div>
+                                                        <div style="margin-bottom: 1rem;">
+                                                            <strong>Expected AI Match:</strong> 
+                                                            <span class="score-badge {% if r.llm_feedback.job_fit.match_percentage >= 70 %}score-high{% elif r.llm_feedback.job_fit.match_percentage >= 45 %}score-medium{% else %}score-low{% endif %}">
+                                                                {{ r.llm_feedback.job_fit.match_percentage }}%
+                                                            </span>
+                                                            <p style="margin-top: 0.5rem; font-size: 0.9rem; color: var(--text-secondary);">
+                                                                {{ r.llm_feedback.job_fit.explanation }}
+                                                            </p>
+                                                        </div>
+                                                        
+                                                        <strong>Core Strengths:</strong>
+                                                        <ul class="ai-bullet-list">
+                                                            {% for strg in r.llm_feedback.job_fit.strengths %}
+                                                                <li>✅ {{ strg }}</li>
+                                                            {% else %}
+                                                                <li>No specific strengths logged.</li>
+                                                            {% endfor %}
+                                                        </ul>
+
+                                                        <strong>Identified Gaps:</strong>
+                                                        <ul class="ai-bullet-list">
+                                                            {% for weak in r.llm_feedback.job_fit.weaknesses %}
+                                                                <li>⚠️ {{ weak }}</li>
+                                                            {% else %}
+                                                                <li>No significant weaknesses logged.</li>
+                                                            {% endfor %}
+                                                        </ul>
+                                                    </div>
+
+                                                    <!-- Right Side: Improvements -->
+                                                    <div>
+                                                        <div class="ai-block-title">💡 Resume Improvement Suggestions</div>
+                                                        {% for sugg in r.llm_feedback.improvement_suggestions %}
+                                                            <div style="margin-bottom: 1rem; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 0.75rem 1rem; border-radius: 10px;">
+                                                                <div>
+                                                                    <span class="prio-badge prio-{{ sugg.priority }}">{{ sugg.priority }}</span>
+                                                                    <strong>{{ sugg.area }}</strong>
+                                                                </div>
+                                                                <p style="margin-top: 0.25rem; font-size: 0.88rem; color: var(--text-secondary);">
+                                                                    {{ sugg.suggestion }}
+                                                                </p>
+                                                            </div>
+                                                        {% else %}
+                                                            <p style="color: var(--text-muted); font-size: 0.9rem; font-style: italic;">No specific improvements generated.</p>
+                                                        {% endfor %}
+                                                    </div>
+                                                </div>
+
+                                                <div class="ai-details-grid" style="margin-top: 1.5rem; border-top: 1px dashed var(--border-color); padding-top: 1.5rem;">
+                                                    <!-- Left: Career Recommendations -->
+                                                    <div>
+                                                        <div class="ai-block-title">🚀 Personalized Career Roadmap</div>
+                                                        <div style="margin-bottom: 0.75rem;">
+                                                            <strong>Recommended Roles:</strong>
+                                                            <p style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 0.15rem;">
+                                                                {{ r.llm_feedback.career_recommendations.suitable_roles | join(', ') }}
+                                                            </p>
+                                                        </div>
+
+                                                        <div style="margin-bottom: 0.75rem;">
+                                                            <strong>Recommended Technologies:</strong>
+                                                            <ul class="ai-bullet-list" style="margin-top: 0.25rem;">
+                                                                {% for skill in r.llm_feedback.career_recommendations.skills_to_learn %}
+                                                                    <li>📚 {{ skill }}</li>
+                                                                {% endfor %}
+                                                            </ul>
+                                                        </div>
+
+                                                        <div style="margin-bottom: 0.75rem;">
+                                                            <strong>Target Certifications:</strong>
+                                                            <p style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 0.15rem;">
+                                                                {{ r.llm_feedback.career_recommendations.certifications | join(', ') }}
+                                                            </p>
+                                                        </div>
+
+                                                        <div>
+                                                            <strong>Portfolio Project Ideas:</strong>
+                                                            <ul class="ai-bullet-list" style="margin-top: 0.25rem;">
+                                                                {% for proj in r.llm_feedback.career_recommendations.projects_to_build %}
+                                                                    <li>💻 {{ proj }}</li>
+                                                                {% endfor %}
+                                                            </ul>
+                                                        </div>
+                                                    </div>
+
+                                                    <!-- Right: Reasoning Chain -->
+                                                    <div>
+                                                        <div class="ai-block-title">🧠 Smart AI Reasoning Engine</div>
+                                                        <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem; font-size: 0.9rem; line-height: 1.6; color: var(--text-secondary); font-style: italic;">
+                                                            "{{ r.llm_feedback.reasoning_chain or 'Heuristic keyword match reasoning.' }}"
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            {% else %}
+                                                <!-- Fallback for historical database entries without full LLM records -->
+                                                <div class="verdict-box" style="margin-bottom: 1rem;">
+                                                    <strong>Keyword Fit:</strong> {{ r.feedback }}
+                                                </div>
+                                                <div style="background: rgba(255, 255, 255, 0.02); border: 1px dashed var(--border-color); border-radius: 12px; padding: 1.5rem; text-align: center; color: var(--text-secondary); font-size: 0.9rem;">
+                                                    📊 Deep AI Recruiter feedback & Career Recommendations are not available for this legacy record.
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% endif %}
+            </div>
+        </main>
+    </div>
+
+    <script>
+        function toggleDetails(panelId, btn) {
+            const panel = document.getElementById(panelId);
+            const span = btn.querySelector('span');
+            
+            if (panel.style.display === 'none') {
+                panel.style.display = 'table-row';
+                span.textContent = 'Collapse';
+                btn.style.borderColor = 'var(--primary)';
+                btn.style.background = 'rgba(99, 102, 241, 0.1)';
+            } else {
+                panel.style.display = 'none';
+                span.textContent = 'Expand';
+                btn.style.borderColor = 'var(--border-color)';
+                btn.style.background = 'transparent';
+            }
+        }
+    </script>
+</body>
+</html>

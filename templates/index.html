@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Smart AI-Powered Resume Screening and Ranker. Easily upload resumes and compare them against job descriptions using state-of-the-art NLP models.">
+    <title>AI Resume Screening & Ranker</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <!-- Fullscreen Loading Overlay -->
+    <div id="loading-overlay">
+        <div class="spinner"></div>
+        <div class="loading-text">Analyzing Resumes with AI...</div>
+        <div class="loading-subtext">Extracting text, computing semantic similarities, and generating recruiter insights. Please wait.</div>
+    </div>
+
+    <div class="container">
+        <header>
+            <h1>AI Resume Screening & Ranker</h1>
+            <p class="subtitle">Extract skills, map gaps, and rank candidates instantly using advanced NLP semantic search</p>
+        </header>
+
+        <main>
+            <!-- Flash Message Alerts -->
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="alert-container">
+                        {% for category, msg in messages %}
+                            <div class="alert-box" id="alert-{{ loop.index }}">
+                                ⚠️ {{ msg }}
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+
+            <div class="card">
+                <form id="screening-form" action="/upload" method="post" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label for="job_desc">Job Description Requirements</label>
+                        <textarea id="job_desc" name="job_desc" placeholder="Paste the target job description requirements here..." required></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Candidate Resumes (PDF Format)</label>
+                        <div class="file-upload-wrapper" id="upload-wrapper">
+                            <span class="upload-icon">📄</span>
+                            <p class="upload-text">Drag & drop candidate resumes here</p>
+                            <p class="upload-hint">or click to browse local files (PDF only, multiple files supported)</p>
+                            <input type="file" id="resumes-input" name="resumes" accept=".pdf" multiple required>
+                        </div>
+                        <div id="file-list" style="margin-top: 1rem; font-size: 0.9rem; color: var(--text-secondary); text-align: left; display: none;">
+                            <strong style="color: var(--text-primary);">Selected Resumes:</strong>
+                            <ul id="selected-files-names" style="margin-top: 0.5rem; padding-left: 1.2rem; list-style-type: disc;"></ul>
+                        </div>
+                    </div>
+
+                    <button type="submit" id="submit-btn" class="btn">Analyze & Rank Candidates</button>
+                </form>
+                
+                <div style="margin-top: 1.5rem; text-align: center;">
+                    <a href="/dashboard" id="view-dashboard-link" class="back-link" style="margin-bottom: 0;">📊 View Stored Candidates Database</a>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const form = document.getElementById('screening-form');
+        const fileInput = document.getElementById('resumes-input');
+        const uploadWrapper = document.getElementById('upload-wrapper');
+        const fileList = document.getElementById('file-list');
+        const fileListNames = document.getElementById('selected-files-names');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const submitBtn = document.getElementById('submit-btn');
+
+        fileInput.addEventListener('change', (e) => {
+            const files = e.target.files;
+            if (files.length > 0) {
+                fileListNames.innerHTML = '';
+                for (let i = 0; i < files.length; i++) {
+                    const li = document.createElement('li');
+                    li.textContent = files[i].name;
+                    fileListNames.appendChild(li);
+                }
+                fileList.style.display = 'block';
+                uploadWrapper.style.borderColor = 'var(--success)';
+            } else {
+                fileList.style.display = 'none';
+                uploadWrapper.style.borderColor = 'var(--border-color)';
+            }
+        });
+
+        // Basic Drag & Drop visual state
+        ['dragenter', 'dragover'].forEach(eventName => {
+            uploadWrapper.addEventListener(eventName, () => {
+                uploadWrapper.style.borderColor = 'var(--primary)';
+                uploadWrapper.style.background = 'rgba(99, 102, 241, 0.05)';
+            }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            uploadWrapper.addEventListener(eventName, () => {
+                if (fileInput.files.length === 0) {
+                    uploadWrapper.style.borderColor = 'var(--border-color)';
+                    uploadWrapper.style.background = 'rgba(15, 23, 42, 0.3)';
+                } else {
+                    uploadWrapper.style.borderColor = 'var(--success)';
+                }
+            }, false);
+        });
+
+        // Form Submit Handler: JavaScript validation + display loading screen
+        form.addEventListener('submit', (e) => {
+            const files = fileInput.files;
+            let hasInvalidFile = false;
+
+            for (let i = 0; i < files.length; i++) {
+                const ext = files[i].name.split('.').pop().toLowerCase();
+                if (ext !== 'pdf') {
+                    hasInvalidFile = true;
+                    break;
+                }
+            }
+
+            if (hasInvalidFile) {
+                e.preventDefault();
+                alert('Invalid file format. Please upload PDF files only.');
+                return;
+            }
+
+            // Show loading modal and disable submission button to prevent double submits
+            loadingOverlay.style.display = 'flex';
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Processing Resumes...';
+        });
+    </script>
+</body>
+</html>
