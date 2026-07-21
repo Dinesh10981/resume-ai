@@ -13,7 +13,6 @@ import logging
 
 import pdfplumber
 import spacy
-from sentence_transformers import SentenceTransformer, util
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -24,14 +23,25 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Loaded spaCy and SentenceTransformer
-try:
-    nlp = spacy.load("en_core_web_sm")
-except Exception:
-    # Fallback if download failed
-    nlp = None
+# Lazy-loaded spaCy and SentenceTransformer to reduce memory at process start
+nlp = None
+_sentence_model = None
 
-sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+def _get_nlp():
+    global nlp
+    if nlp is None:
+        try:
+            nlp = spacy.load("en_core_web_sm")
+        except Exception:
+            nlp = None
+    return nlp
+
+def _get_sentence_model():
+    global _sentence_model
+    if _sentence_model is None:
+        from sentence_transformers import SentenceTransformer
+        _sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+    return _sentence_model
 
 # LLM Client setup
 env_key = os.getenv("OPENAI_API_KEY")
@@ -40,7 +50,7 @@ api_key = env_key if (env_key and env_key != "your-api-key-here") else None
 base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 llm_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
-client = OpenAI(api_key=api_key, base_url=base_url)
+client = OpenAI(api_key=api_key, base_url=base_url) if api_key else None
 
 # ──────────────────────────────────────
 # Skill Database (80+ industry skills)
@@ -98,8 +108,10 @@ def extract_text(file_path):
 
 def compute_similarity(text1, text2):
     """Compute cosine similarity between two texts using Sentence Transformers."""
-    emb1 = sentence_model.encode(text1, convert_to_tensor=True)
-    emb2 = sentence_model.encode(text2, convert_to_tensor=True)
+    model = _get_sentence_model()
+    emb1 = model.encode(text1, convert_to_tensor=True)
+    emb2 = model.encode(text2, convert_to_tensor=True)
+    from sentence_transformers import util
     return util.cos_sim(emb1, emb2).item()
 
 
@@ -218,6 +230,10 @@ def generate_llm_feedback(resume_text, job_desc, matched, missing, resume_skills
 
     for attempt in range(3):
         try:
+            # If no LLM client is configured, skip API call and use fallback
+            if client is None:
+                raise RuntimeError("No LLM client configured; using fallback response")
+
             response = client.chat.completions.create(
                 model=llm_model,
                 messages=[
