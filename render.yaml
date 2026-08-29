@@ -3,8 +3,9 @@ services:
     name: resume-ai
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt && python -m spacy download en_core_web_sm
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 180 --max-requests 100 --max-requests-jitter 10
+    healthCheckPath: /health
     envVars:
       - key: FLASK_SECRET_KEY
         generateValue: true
@@ -14,7 +15,13 @@ services:
         value: 0.0.0.0
       - key: PORT
         value: 10000
+      - key: DASHBOARD_LIMIT
+        value: 50
       - key: MONGODB_URI
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: LLM_MODEL
+        value: gpt-4o-mini
+      - key: EMBEDDING_MODEL
+        value: text-embedding-3-small
