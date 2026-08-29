@@ -1,9 +1,7 @@
-flask>=3.1.0
-pymongo>=4.10.0
-pdfplumber>=0.11.0
-spacy>=3.7.0
-sentence-transformers>=5.0.0
-openai>=1.50.0
-python-dotenv>=1.0.0
-werkzeug>=3.1.0
-gunicorn>=23.0.0
+flask>=3.1.0,<4
+pymongo>=4.10.0,<5
+pdfplumber>=0.11.0,<1
+openai>=1.50.0,<2
+python-dotenv>=1.0.0,<2
+werkzeug>=3.1.0,<4
+gunicorn>=23.0.0,<24

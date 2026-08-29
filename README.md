@@ -13,7 +13,7 @@ An intelligent resume screening and ranking system powered by NLP and LLMs. Uplo
 
 ### 🔍 Core Analysis
 - **PDF Resume Parsing** — Extracts text from uploaded PDF resumes using `pdfplumber`
-- **Semantic Similarity** — Computes cosine similarity between resumes and job descriptions using `sentence-transformers` (all-MiniLM-L6-v2)
+- **Semantic Similarity** — Computes cosine similarity between resumes and job descriptions using OpenAI `text-embedding-3-small`, with a lightweight lexical fallback
 - **Skill Extraction** — Matches 80+ industry skills using word-boundary regex patterns
 - **Skill Gap Analysis** — Identifies matched and missing skills against job requirements
 - **Candidate Ranking** — Weighted scoring (70% semantic + 30% skill match) with ranked results
@@ -37,8 +37,8 @@ An intelligent resume screening and ranking system powered by NLP and LLMs. Uplo
 
 | Layer | Technology |
 |-------|-----------|
-| **Backend** | Python 3.9+, Flask |
-| **AI/ML** | OpenAI GPT-4o-mini, Sentence Transformers, spaCy |
+| **Backend** | Python 3.11, Flask |
+| **AI/ML** | OpenAI GPT-4o-mini, text-embedding-3-small, skill extraction |
 | **Database** | MongoDB (local via MongoDB Compass) |
 | **Frontend** | HTML5, CSS3 (Glassmorphism design), Vanilla JS |
 | **PDF Parsing** | pdfplumber |
@@ -68,7 +68,7 @@ resume-ai/
 ## 🚀 Getting Started
 
 ### Prerequisites
-- **Python 3.9+**
+- **Python 3.11+**
 - **MongoDB** running locally (install via [MongoDB Community](https://www.mongodb.com/try/download/community) or [MongoDB Compass](https://www.mongodb.com/products/compass))
 - **OpenAI API Key** (optional — app works without it using fallback mode)
 
@@ -87,7 +87,6 @@ source .venv/bin/activate
 ### 3. Install Dependencies
 ```bash
 pip install -r requirements.txt
-python -m spacy download en_core_web_sm
 ```
 
 ### 4. Configure Environment Variables
@@ -215,9 +214,9 @@ This project is for educational and personal use.
 
 ## 🙏 Acknowledgments
 
-- [Sentence Transformers](https://www.sbert.net/) for semantic similarity
-- [spaCy](https://spacy.io/) for NLP processing
+- [OpenAI embeddings](https://platform.openai.com/docs/guides/embeddings) for semantic similarity
 - [pdfplumber](https://github.com/jsvine/pdfplumber) for PDF text extraction
 - [OpenAI](https://openai.com/) for LLM-powered analysis
 - [Flask](https://flask.palletsprojects.com/) for the web framework
 - [MongoDB](https://www.mongodb.com/) for data persistence
+

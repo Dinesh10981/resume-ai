@@ -1,288 +1,238 @@
-"""
-model_utils.py — AI Engine for Smart Resume Analyzer
-=====================================================
-Handles PDF extraction, skill matching, semantic similarity,
-and LLM-powered recruiter feedback generation.
-"""
+"""Lightweight NLP and OpenAI helpers for resume screening."""
 
+import json
+import logging
+import math
 import os
 import re
-import json
 import time
-import logging
+from collections import Counter
 
 import pdfplumber
-import spacy
-from openai import OpenAI
 from dotenv import load_dotenv
+from openai import OpenAI
 
-# ──────────────────────────────────────
-# Configuration
-# ──────────────────────────────────────
 load_dotenv()
-
 logger = logging.getLogger(__name__)
 
-# Lazy-loaded spaCy and SentenceTransformer to reduce memory at process start
-nlp = None
-_sentence_model = None
+_openai_client = None
 
-def _get_nlp():
-    global nlp
-    if nlp is None:
-        try:
-            nlp = spacy.load("en_core_web_sm")
-        except Exception:
-            nlp = None
-    return nlp
 
-def _get_sentence_model():
-    global _sentence_model
-    if _sentence_model is None:
-        from sentence_transformers import SentenceTransformer
-        _sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
-    return _sentence_model
+def _get_openai_client():
+    """Create the API client lazily inside the serving worker."""
+    global _openai_client
+    key = os.getenv("OPENAI_API_KEY")
+    if not key or key == "your-api-key-here":
+        return None
+    if _openai_client is None:
+        _openai_client = OpenAI(
+            api_key=key,
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            timeout=45.0,
+            max_retries=1,
+        )
+    return _openai_client
 
-# LLM Client setup
-env_key = os.getenv("OPENAI_API_KEY")
-api_key = env_key if (env_key and env_key != "your-api-key-here") else None
 
-base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-llm_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
-
-client = OpenAI(api_key=api_key, base_url=base_url) if api_key else None
-
-# ──────────────────────────────────────
-# Skill Database (80+ industry skills)
-# ──────────────────────────────────────
 SKILL_DB = [
-    # Programming Languages
-    "python", "java", "javascript", "typescript", "c\\+\\+", "c#",
-    "ruby", "golang", "rust", "kotlin", "swift", "scala", "php",
-    "r programming",
-    # Web & Frontend
+    "python", "java", "javascript", "typescript", "c\\+\\+", "c#", "ruby",
+    "golang", "rust", "kotlin", "swift", "scala", "php", "r programming",
     "react", "angular", "vue\\.js", "next\\.js", "node\\.js", "express",
-    "html", "css", "tailwind", "bootstrap", "sass",
-    # Data & ML
-    "machine learning", "deep learning", "natural language processing",
-    "computer vision", "tensorflow", "pytorch", "keras", "scikit-learn",
-    "pandas", "numpy", "data analysis", "data engineering",
-    "data visualization", "power bi", "tableau",
-    # Databases
-    "sql", "mysql", "postgresql", "mongodb", "redis", "elasticsearch",
-    "dynamodb", "cassandra",
-    # Cloud & DevOps
-    "aws", "azure", "gcp", "google cloud", "docker", "kubernetes",
-    "terraform", "jenkins", "ci/cd", "github actions", "gitlab",
-    "linux", "nginx",
-    # Tools & Frameworks
-    "flask", "django", "spring boot", "fastapi",
-    "rest api", "graphql", "microservices",
-    "git", "agile", "scrum", "jira",
-    # AI & LLM
-    "langchain", "llm", "prompt engineering", "rag",
-    "openai", "hugging face", "transformers",
-    # Soft Skills & Domains
-    "project management", "team leadership", "communication",
-    "problem solving", "system design",
+    "html", "css", "tailwind", "bootstrap", "sass", "machine learning",
+    "deep learning", "natural language processing", "computer vision",
+    "tensorflow", "pytorch", "keras", "scikit-learn", "pandas", "numpy",
+    "data analysis", "data engineering", "data visualization", "power bi",
+    "tableau", "sql", "mysql", "postgresql", "mongodb", "redis",
+    "elasticsearch", "dynamodb", "cassandra", "aws", "azure", "gcp",
+    "google cloud", "docker", "kubernetes", "terraform", "jenkins", "ci/cd",
+    "github actions", "gitlab", "linux", "nginx", "flask", "django",
+    "spring boot", "fastapi", "rest api", "graphql", "microservices", "git",
+    "agile", "scrum", "jira", "langchain", "llm", "prompt engineering", "rag",
+    "openai", "hugging face", "transformers", "project management",
+    "team leadership", "communication", "problem solving", "system design",
     "excel", "matlab", "spark", "hadoop", "kafka", "airflow",
 ]
 
-# Compile regex patterns for word-boundary matching
-_skill_patterns = {}
-for skill in SKILL_DB:
-    # Escape special regex characters in skills like c++ and vue.js
-    _skill_patterns[skill] = re.compile(r"\b" + skill + r"\b", re.IGNORECASE)
+_skill_patterns = {
+    skill: re.compile(r"\b" + skill + r"\b", re.IGNORECASE) for skill in SKILL_DB
+}
+_token_pattern = re.compile(r"[a-z0-9+#.]{2,}", re.IGNORECASE)
 
-# ──────────────────────────────────────
-# Core Functions
-# ──────────────────────────────────────
+
 def extract_text(file_path):
-    """Extract text from a PDF file."""
     text = ""
     with pdfplumber.open(file_path) as pdf:
         for page in pdf.pages:
             text += page.extract_text() or ""
-    return text.strip()  # Return original case, lowercasing will happen when parsing skills/embedding
+    return text.strip()
+
+
+def _cosine(left, right):
+    dot = sum(a * b for a, b in zip(left, right))
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if not left_norm or not right_norm:
+        return 0.0
+    return max(0.0, min(1.0, dot / (left_norm * right_norm)))
+
+
+def _lexical_similarity(text1, text2):
+    left = Counter(_token_pattern.findall(text1.lower()))
+    right = Counter(_token_pattern.findall(text2.lower()))
+    vocabulary = left.keys() | right.keys()
+    return _cosine([left[token] for token in vocabulary], [right[token] for token in vocabulary])
 
 
 def compute_similarity(text1, text2):
-    """Compute cosine similarity between two texts using Sentence Transformers."""
-    model = _get_sentence_model()
-    emb1 = model.encode(text1, convert_to_tensor=True)
-    emb2 = model.encode(text2, convert_to_tensor=True)
-    from sentence_transformers import util
-    return util.cos_sim(emb1, emb2).item()
+    """Use hosted semantic embeddings without loading PyTorch into Render RAM."""
+    client = _get_openai_client()
+    if client is not None:
+        try:
+            response = client.embeddings.create(
+                model=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
+                input=[text1[:12000], text2[:12000]],
+                encoding_format="float",
+            )
+            return _cosine(response.data[0].embedding, response.data[1].embedding)
+        except Exception as exc:
+            logger.warning("Embedding request failed; using lexical fallback: %s", exc)
+    return _lexical_similarity(text1, text2)
 
 
 def extract_skills(text):
-    """Extract skills using pre-compiled regex patterns."""
-    text_lower = text.lower()
-    skills_found = []
+    found = []
     for skill, pattern in _skill_patterns.items():
-        if pattern.search(text_lower):
-            display_name = skill.replace("\\", "")
-            skills_found.append(display_name)
-    return list(set(skills_found))
+        if pattern.search(text):
+            found.append(skill.replace("\\", ""))
+    return sorted(set(found))
 
 
 def skill_gap(job_skills, resume_skills):
-    """Compare job skills with candidate skills and identify overlap/gap."""
-    matched = list(set(job_skills) & set(resume_skills))
-    missing = list(set(job_skills) - set(resume_skills))
+    matched = sorted(set(job_skills) & set(resume_skills))
+    missing = sorted(set(job_skills) - set(resume_skills))
     return matched, missing
 
 
 def final_score(similarity, skill_score):
-    """Compute the weighted final match score."""
     return round((similarity * 0.7 + skill_score * 0.3) * 100, 2)
 
 
 def generate_feedback(matched, missing):
-    """Fallback simple feedback string."""
-    feedback = ""
+    parts = []
     if matched:
-        feedback += "Strong in: " + ", ".join(matched) + ". "
+        parts.append("Strong in: " + ", ".join(matched) + ".")
     if missing:
-        feedback += "Needs improvement in: " + ", ".join(missing)
+        parts.append("Needs improvement in: " + ", ".join(missing) + ".")
     else:
-        feedback += "Great match for the role."
-    return feedback
+        parts.append("Great match for the role.")
+    return " ".join(parts)
 
 
-# ──────────────────────────────────────
-# LLM Feedback Generator
-# ──────────────────────────────────────
+SYSTEM_PROMPT = """You are a senior technical recruiter and career coach.
+Compare the resume with the job description. Give specific, evidence-based feedback,
+not generic advice. Return only a valid JSON object in the requested schema. Provide a
+concise decision rationale; do not reveal private chain-of-thought."""
 
-SYSTEM_PROMPT = """You are an elite Senior Technical Recruiter, HR Lead, and Executive Career Coach.
-Analyze the candidate's resume against the provided job description requirements.
-
-Your feedback must satisfy these rules:
-- Think step-by-step internally like a human expert.
-- Avoid generic templates or robotic writing.
-- Highlight specific strengths, achievements, and project items in the resume.
-- Prioritize resume improvement suggestions clearly as Critical, Important, or Optional.
-- Provide a personalized career path recommendation (roles, skills, certifications, and realistic project ideas).
-- Match percentage must be justified.
-
-Return ONLY a valid JSON object matching the schema below. Do not wrap the JSON in markdown formatting (like ```json). Ensure keys exist and have specific values."""
-
-USER_PROMPT_TEMPLATE = """Analyze this candidate's details against the Job Description:
-
-JOB DESCRIPTION:
+USER_PROMPT_TEMPLATE = """JOB DESCRIPTION:
 {job_desc}
 
 CANDIDATE RESUME:
 {resume_text}
 
-PRE-COMPUTED SKILL ANALYSIS:
-- Skills found in resume: {resume_skills}
-- Matching job skills: {matched_skills}
-- Missing job skills: {missing_skills}
+PRE-COMPUTED ANALYSIS:
+- Resume skills: {resume_skills}
+- Matched skills: {matched_skills}
+- Missing skills: {missing_skills}
 - Semantic similarity: {similarity_pct}%
 
-Please output a JSON response structured exactly like this:
+Return this exact JSON structure:
 {{
-  "recruiter_verdict": "Detailed executive summary (3-4 sentences) evaluating strengths and gaps from a recruiter perspective.",
+  "recruiter_verdict": "3-4 sentence recruiter summary",
   "job_fit": {{
-    "match_percentage": <integer 0-100>,
-    "explanation": "2-3 sentences justifying the match score based on experience and overlap.",
-    "strengths": ["Strength 1 (specific to resume content)", "Strength 2"],
-    "weaknesses": ["Weakness 1 (specific to resume content)", "Weakness 2"]
+    "match_percentage": 0,
+    "explanation": "evidence-based explanation",
+    "strengths": ["specific strength"],
+    "weaknesses": ["specific weakness"]
   }},
   "improvement_suggestions": [
-    {{
-      "priority": "critical",
-      "area": "Area name",
-      "suggestion": "Detailed, specific suggestion for improving the resume (e.g. ATS optimization, formatting, project description)."
-    }},
-    {{
-      "priority": "important",
-      "area": "Area name",
-      "suggestion": "Actionable suggestion."
-    }},
-    {{
-      "priority": "optional",
-      "area": "Area name",
-      "suggestion": "Nice-to-have feedback."
-    }}
+    {{"priority": "critical", "area": "area", "suggestion": "action"}}
   ],
   "career_recommendations": {{
-    "suitable_roles": ["Role 1", "Role 2"],
-    "skills_to_learn": ["Skill 1 (with justification)", "Skill 2"],
-    "certifications": ["Certification 1", "Certification 2"],
-    "projects_to_build": ["Detailed project idea 1 based on their skills", "Project idea 2"]
+    "suitable_roles": ["role"],
+    "skills_to_learn": ["skill and reason"],
+    "certifications": ["certification"],
+    "projects_to_build": ["project idea"]
   }},
-  "reasoning_chain": "Your step-by-step recruiter rationale connecting the candidate's experience and education to the target role (3-4 sentences)."
+  "reasoning_chain": "concise evidence-based decision rationale"
 }}
 """
 
+
+def _fallback_feedback(matched, missing, similarity):
+    return {
+        "recruiter_verdict": f"The candidate matches {len(matched)} required skills. "
+        + generate_feedback(matched, missing),
+        "job_fit": {
+            "match_percentage": int(similarity * 100),
+            "explanation": "Evaluated using document similarity and skill overlap.",
+            "strengths": [f"Knowledge of {skill}" for skill in matched[:3]]
+            or ["Matches baseline terminology"],
+            "weaknesses": [f"Missing {skill}" for skill in missing[:3]]
+            or ["No direct skill gaps detected"],
+        },
+        "improvement_suggestions": [{
+            "priority": "critical",
+            "area": "Skill gap",
+            "suggestion": f"Demonstrate: {', '.join(missing[:3])}"
+            if missing else "Add measurable outcomes to major achievements.",
+        }],
+        "career_recommendations": {
+            "suitable_roles": ["Software Developer", "IT Professional"],
+            "skills_to_learn": missing[:3] or ["System design"],
+            "certifications": ["A relevant cloud or role-based certification"],
+            "projects_to_build": ["Build a deployed project demonstrating the target skills"],
+        },
+        "reasoning_chain": "The recommendation is based on document similarity and verified skill overlap.",
+    }
+
+
 def generate_llm_feedback(resume_text, job_desc, matched, missing, resume_skills=None, similarity=0.0):
-    """Call the LLM to get deep structured analysis, falling back to rule-based analysis on failure."""
+    client = _get_openai_client()
+    if client is None:
+        return _fallback_feedback(matched, missing, similarity)
+
     prompt = USER_PROMPT_TEMPLATE.format(
         job_desc=job_desc[:3000],
         resume_text=resume_text[:4000],
         resume_skills=", ".join(resume_skills or []),
         matched_skills=", ".join(matched),
         missing_skills=", ".join(missing),
-        similarity_pct=round(similarity * 100, 1)
+        similarity_pct=round(similarity * 100, 1),
     )
+    required = {
+        "recruiter_verdict", "job_fit", "improvement_suggestions",
+        "career_recommendations", "reasoning_chain",
+    }
 
-    for attempt in range(3):
+    for attempt in range(2):
         try:
-            # If no LLM client is configured, skip API call and use fallback
-            if client is None:
-                raise RuntimeError("No LLM client configured; using fallback response")
-
             response = client.chat.completions.create(
-                model=llm_model,
+                model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
                 ],
-                temperature=0.7,
-                max_tokens=1500
+                response_format={"type": "json_object"},
+                temperature=0.4,
+                max_tokens=1400,
             )
-            raw_content = response.choices[0].message.content.strip()
-
-            # Clean markdown code block wraps if present
-            if raw_content.startswith("```"):
-                raw_content = re.sub(r"^```(?:json)?\s*", "", raw_content)
-                raw_content = re.sub(r"\s*```$", "", raw_content)
-
-            parsed = json.loads(raw_content)
-            # Ensure correct keys are populated
-            required = ["recruiter_verdict", "job_fit", "improvement_suggestions", "career_recommendations", "reasoning_chain"]
-            if all(k in parsed for k in required):
+            parsed = json.loads(response.choices[0].message.content)
+            if required.issubset(parsed):
                 return parsed
-            else:
-                raise ValueError("JSON missing required fields")
+            raise ValueError("LLM JSON is missing required fields")
+        except Exception as exc:
+            logger.warning("LLM feedback attempt %d failed: %s", attempt + 1, exc)
+            if attempt == 0:
+                time.sleep(0.5)
 
-        except Exception as e:
-            logger.warning("LLM attempt %d failed: %s", attempt + 1, e)
-            time.sleep(1)
-
-    # Fallback structure
-    return {
-        "recruiter_verdict": f"The candidate matches {len(matched)} of the required skills. " + generate_feedback(matched, missing),
-        "job_fit": {
-            "match_percentage": int(similarity * 100),
-            "explanation": "Evaluated based on semantic similarity and skill overlap.",
-            "strengths": [f"Knowledge of {s}" for s in matched[:3]] if matched else ["Matches baseline keywords"],
-            "weaknesses": [f"Missing {s}" for s in missing[:3]] if missing else ["No direct keyword gaps"]
-        },
-        "improvement_suggestions": [
-            {
-                "priority": "critical",
-                "area": "Skill Gap",
-                "suggestion": f"Focus on acquiring or highlighting: {', '.join(missing[:3])}" if missing else "Optimize formatting for ATS."
-            }
-        ],
-        "career_recommendations": {
-            "suitable_roles": ["Software Developer", "IT Professional"],
-            "skills_to_learn": missing[:3] if missing else ["Advanced System Architecture"],
-            "certifications": ["Relevant cloud developer or database certifications"],
-            "projects_to_build": ["Create a portfolio showing practical integration of these skills."]
-        },
-        "reasoning_chain": "Fallback logic triggered due to API timeout or error. Generated using keyword heuristic matching."
-    }
+    return _fallback_feedback(matched, missing, similarity)
